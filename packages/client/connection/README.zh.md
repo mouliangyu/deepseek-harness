@@ -8,6 +8,8 @@
 
 浏览器侧的 `ctx.authorityRegistry` 是额外 DSH authority 的客户端注册表。provider 提供官方 `IApiClient`，并自行管理 transport、重连策略和可选的健康探测。注册表只公开 `connecting`、`ready`、`degraded`、`failed` 与 `closed` 生命周期状态，按 provider id 提供路由查询，并在 teardown 时关闭 provider 连接。同一 provider 的并发连接请求共享一次连接尝试。注册表不轮询、不重试，也不解释 provider 专属的健康数据。
 
+`ctx.connection.routeApi()` 安装唯一的顶层 API router。此后所有客户端插件都读取路由后的 `connection.api`，而 `ConnectionController` 仍使用原始本地 API 管理自身的就绪握手和事件流 generation。该注册可释放，并拒绝第二个 router。参见[顶层 authority 路由 Agent Note](../../../.agents/notes/implemented/architecture/2026-08-17-top-level-authority-api-routing.md)。
+
 ## /api 浏览器信任栅栏
 
 node 半侧在桥接或 upgrade 前守卫 `/api` 下的每个入口（`src/api-request-trust.ts`）。每个请求——无论是否带浏览器标记——`Host` 都必须是回环地址权威，或与某个 `trustedHosts` 条目匹配：带端口的 `host:port` 条目精确匹配，不带端口的条目匹配任意端口，两侧均经 WHATWG 归一化后比较（DNS rebinding 防御）。刻意不为无浏览器标记的 HTTP 请求开捷径：明文 HTTP 下浏览器的图片与导航读取既不带 `Origin` 也不带 Fetch-Metadata，因此无标记请求仍可能是被重绑页面发起的、响应可被读走的读取，而 Host 是重绑唯一伪造不了的请求头；WebSocket 浏览器握手会带 `Origin` 并通过同一道比较。非浏览器客户端经由回环地址、部署推导的 LAN IP 字面量或已声明的权威通过同一道栅栏。当标记存在时，如附带 `Origin`，则它必须与 Host 权威完全一致；显式的 `sec-fetch-site: cross-site` 标记一律拒绝。不是纯的、规范形 `host[:port]` 权威的 `trustedHosts` 条目——即 WHATWG 解析读回后与原文不完全一致的——会让插件加载明确报错：否则解析会悄悄授权 `harness.internal/path` 这类笔误里的 hostname，或把悬空冒号、补零端口放大成任意端口授权。HTTP 失败在任何 RPC 分发之前以纯 403 应答，upgrade 失败在启动任何事件流前拒绝握手。非回环组合必须显式信任其服务权威：Web 运行时从全接口服务器配置推导 LAN IP 字面量，cordis.yml 中的 `trustedHosts` 与 CLI（命令行界面）的 `--trusted-host` flag 则声明具名权威。`dsh web --host 0.0.0.0` 在远程访问具备认证层之前有意不受支持。这道栅栏是可达性策略，而不是认证；Web 载体不提供认证层。决策记录：[api 浏览器信任边界 Agent Note](../../../.agents/notes/implemented/architecture/2026-07-28-api-browser-trust-boundary.md)。

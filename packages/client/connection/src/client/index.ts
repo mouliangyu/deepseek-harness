@@ -61,8 +61,15 @@ export const inject: string[] = []
  * is ready — connection stays consumer-agnostic).
  */
 export interface ConnectionHandle {
-  /** Shared api client (fixture or real, decided at boot from the page URL). */
+  /** Shared API client after the optional top-level router. */
   readonly api: IApiClient
+  /**
+   * Install the sole top-level API router used by every client plugin.
+   * The connection loop continues to own the local transport directly.
+   * @param api - routed client that delegates local requests to the current API.
+   * @returns disposer that restores the local API.
+   */
+  routeApi(api: IApiClient): () => void
   /** Whether the current page authority is loopback; non-browser contexts default to true. */
   readonly isLoopback: boolean
   /** Generation-scoped Host facts, including the account home and native path-open capability. */
@@ -92,6 +99,7 @@ export function apply(ctx: Context): void {
   const fixture = pageLocation !== undefined && new URLSearchParams(pageLocation.search).has('fixture')
   const fixtureClient = fixture ? new FixtureApiClient() : undefined
   const api: IApiClient = fixtureClient ?? new WebApiClient()
+  let routedApi: IApiClient | undefined
   const rpc = fixtureClient?.rpc ?? createWebConnectionRpc()
   let started = false
   let description: HostDescription | undefined
@@ -108,7 +116,17 @@ export function apply(ctx: Context): void {
     }
   }
   const handle: ConnectionHandle = {
-    api,
+    get api() { return routedApi ?? api },
+    routeApi(next) {
+      if (routedApi !== undefined) throw new Error('connection: the top-level API router is already registered')
+      routedApi = next
+      let active = true
+      return () => {
+        if (!active) return
+        active = false
+        if (routedApi === next) routedApi = undefined
+      }
+    },
     isLoopback: pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
     hostDescription: {
       getSnapshot: () => description,

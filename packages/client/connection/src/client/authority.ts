@@ -62,6 +62,7 @@ export class AuthorityRegistry {
   private readonly pending = new Map<string, Promise<AuthorityConnection>>()
   private readonly states = new Map<string, AuthorityState>()
   private readonly listeners = new Set<() => void>()
+  private snapshot: AuthoritySnapshot = { ids: [], states: {} }
 
   /**
    * Register a provider.
@@ -113,7 +114,7 @@ export class AuthorityRegistry {
       this.connections.set(id, { connection, unsubscribe })
       this.emit()
       return connection
-    }).catch((error) => {
+    }).catch((error: unknown) => {
       if (this.providers.get(id) === provider) {
         this.states.set(id, 'failed')
         this.emit()
@@ -156,9 +157,7 @@ export class AuthorityRegistry {
    * @returns the current provider ids and lifecycle states.
    */
   getSnapshot(): AuthoritySnapshot {
-    const states: Record<string, AuthorityState> = {}
-    for (const [id, state] of this.states) states[id] = state
-    return { ids: [...this.providers.keys()], states }
+    return this.snapshot
   }
 
   /**
@@ -179,5 +178,10 @@ export class AuthorityRegistry {
     await Promise.all([...this.connections.keys()].map(id => this.disconnect(id)))
   }
 
-  private emit(): void { for (const listener of this.listeners) listener() }
+  private emit(): void {
+    const states: Record<string, AuthorityState> = {}
+    for (const [id, state] of this.states) states[id] = state
+    this.snapshot = { ids: [...this.providers.keys()], states }
+    for (const listener of this.listeners) listener()
+  }
 }

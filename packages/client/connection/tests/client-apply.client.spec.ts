@@ -90,6 +90,19 @@ describe('connection client apply', () => {
     expect((await mount()).isLoopback).toBe(false)
   })
 
+  it('publishes one top-level API router and restores the local client on disposal', async () => {
+    ;(globalThis as Win).location = { hostname: 'localhost', search: '?fixture' }
+    const handle = await mount()
+    const local = handle.api
+    const routed = {} as typeof local
+    const dispose = handle.routeApi(routed)
+    expect(handle.api).toBe(routed)
+    expect(() => handle.routeApi(local)).toThrow('top-level API router is already registered')
+    dispose()
+    dispose()
+    expect(handle.api).toBe(local)
+  })
+
   it('start() hands out one loop, rejects a second consumer, and stop() aborts the streams', async () => {
     ;(globalThis as Win).location = { hostname: 'localhost', search: '?fixture' }
     const handle = await mount()

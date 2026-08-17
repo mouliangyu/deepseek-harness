@@ -1,15 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AuthorityRegistry, type AuthorityConnection } from '../src/client/authority.ts'
 
-function connection(state: AuthorityConnection['state'] = 'ready', retainListener = false): AuthorityConnection & { emit: (next: AuthorityConnection['state']) => void } {
+function connection(state: AuthorityConnection['state'] = 'ready', retainListener = false): AuthorityConnection & {
+  closeSpy: ReturnType<typeof vi.fn>
+  emit: (next: AuthorityConnection['state']) => void
+} {
   const listeners = new Set<(next: AuthorityConnection['state']) => void>()
   let current = state
+  const closeSpy = vi.fn(async () => { current = 'closed' })
   return {
     api: {} as never,
+    closeSpy,
     get state() { return current },
     subscribe(listener) { listeners.add(listener); return () => { if (!retainListener) listeners.delete(listener) } },
     emit(next) { current = next; for (const listener of listeners) listener(next) },
-    close: vi.fn(async () => { current = 'closed' }),
+    close: closeSpy,
   }
 }
 
@@ -22,9 +27,12 @@ describe('AuthorityRegistry', () => {
     const provider = { id: 'remote-a', kind: 'ssh', connect: vi.fn(async () => remote) }
     const dispose = registry.register(provider)
     expect(registry.getSnapshot()).toEqual({ ids: ['remote-a'], states: { 'remote-a': 'closed' } })
+    expect(registry.getSnapshot()).toBe(registry.getSnapshot())
 
     await expect(registry.connect('remote-a')).resolves.toBe(remote)
+    const readySnapshot = registry.getSnapshot()
     await expect(registry.connect('remote-a')).resolves.toBe(remote)
+    expect(registry.getSnapshot()).toBe(readySnapshot)
     expect(provider.connect).toHaveBeenCalledOnce()
     expect(registry.get('remote-a')).toBe(remote)
     expect(registry.getSnapshot().states['remote-a']).toBe('ready')
@@ -32,7 +40,7 @@ describe('AuthorityRegistry', () => {
     expect(registry.getSnapshot().states['remote-a']).toBe('degraded')
 
     await registry.disconnect('remote-a')
-    expect(remote.close).toHaveBeenCalledOnce()
+    expect(remote.closeSpy).toHaveBeenCalledOnce()
     expect(registry.getSnapshot().states['remote-a']).toBe('closed')
     await dispose()
     await dispose()
@@ -97,8 +105,8 @@ describe('AuthorityRegistry', () => {
 
     await registry.dispose()
 
-    expect(first.close).toHaveBeenCalledOnce()
-    expect(second.close).toHaveBeenCalledOnce()
+    expect(first.closeSpy).toHaveBeenCalledOnce()
+    expect(second.closeSpy).toHaveBeenCalledOnce()
   })
 
   it('closes a connection that finishes after its provider is unregistered', async () => {
@@ -117,7 +125,7 @@ describe('AuthorityRegistry', () => {
 
     await expect(attempt).rejects.toThrow('authority provider was unregistered while connecting: remote-a')
     await disposing
-    expect(remote.close).toHaveBeenCalledOnce()
+    expect(remote.closeSpy).toHaveBeenCalledOnce()
     expect(registry.getSnapshot()).toEqual({ ids: [], states: {} })
   })
 })
