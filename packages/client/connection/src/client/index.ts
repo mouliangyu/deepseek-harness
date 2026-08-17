@@ -11,6 +11,7 @@ import { WebApiClient } from './web-api-client.ts'
 import { createWebConnectionRpc } from './rpc.ts'
 import { isLoopbackHostname } from '../loopback-hostname.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
+import { AuthorityRegistry } from './authority.ts'
 
 // ---- Contract re-exports (browser-safe apiproxy channels + core types) ----
 export type {
@@ -40,6 +41,8 @@ export {
 // controller remains package-internal.
 export type { ConnectionConfig, ConnectionSinks, ConnectionState }
 export type { ClientConnectionRpc } from '../rpc.ts'
+export { AuthorityRegistry } from './authority.ts'
+export type { AuthorityConnection, AuthorityProvider, AuthoritySnapshot, AuthorityState } from './authority.ts'
 
 /** Observable Host description published by each completed connection handshake. */
 export interface HostDescriptionSource {
@@ -82,6 +85,9 @@ export interface ConnectionHandle {
  * @param ctx - client cordis context.
  */
 export function apply(ctx: Context): void {
+  const authorityRegistry = new AuthorityRegistry()
+  ctx.provide('authorityRegistry', authorityRegistry)
+  ctx.effect(() => () => authorityRegistry.dispose(), 'client-connection.authorities')
   const pageLocation = typeof location === 'undefined' ? undefined : location
   const fixture = pageLocation !== undefined && new URLSearchParams(pageLocation.search).has('fixture')
   const fixtureClient = fixture ? new FixtureApiClient() : undefined
