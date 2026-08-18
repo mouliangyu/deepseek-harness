@@ -12,11 +12,20 @@
  * re-renders from pushed invalidations or the post-apply reload.
  */
 
-import { useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
 import { Button, IconPlusOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
+import type { AuthorityRegistry } from '@deepseek-ai/dsh-client-connection/client'
+
+/** Configuration scope methods exposed by the runtime's authority router. */
+export interface ConfigAuthorityRouter {
+  /** Return the selected authority, or undefined for local. */
+  getConfigAuthority(): string | undefined
+  /** Select the authority used by settings, credentials, and model requests. */
+  setConfigAuthority(authority: string | undefined): void
+}
 import { CustomProviderCard } from './CustomProviderCard.tsx'
 import { deriveKeyRef, messageOf, protocolChoices, providerUsable } from './store.ts'
 import type { ModelsSettingsStore, ProviderRow } from './store.ts'
@@ -37,9 +46,15 @@ export interface ModelsSectionInjected {
   api: Pick<IApiClient, 'settings' | 'credentials' | 'llm'>
   /** Settings schema and immutable path callbacks. */
   schema: SettingsSchemaOperations
+  /** Connected authorities offered by the configuration target selector. */
+  authorityRegistry?: AuthorityRegistry
+  /** Shared router that applies the selected configuration target. */
+  authorityRouter?: ConfigAuthorityRouter
   /** Section copy. */
   t: (key: keyof typeof en) => string
 }
+
+const EMPTY_AUTHORITY_SNAPSHOT = { ids: [] as readonly string[], states: {} as Readonly<Record<string, string>> }
 
 /**
  * Props delivered by the slot outlet: the inject face spread flat (the
@@ -176,16 +191,37 @@ export function providerCopy(template: string, target: ProviderIdentity): string
  * @returns the section, or null while the shell has not injected yet.
  */
 export function ModelsSection(props: ModelsSectionProps): ReactNode {
-  const { controller, useSnapshot, api, schema, t } = props
+  const { controller, useSnapshot, api, schema, t, authorityRegistry, authorityRouter } = props
   if (
     controller === undefined || useSnapshot === undefined || api === undefined
     || schema === undefined || t === undefined
   ) return null
-  return <Loaded injected={{ controller, useSnapshot, api, schema, t }} />
+  return <Loaded injected={{
+    controller, useSnapshot, api, schema, t,
+    ...authorityRegistry === undefined ? {} : { authorityRegistry },
+    ...authorityRouter === undefined ? {} : { authorityRouter },
+  }} />
 }
 
 function Loaded({ injected }: { injected: ModelsSectionFace }): ReactNode {
   const { controller, api, schema, t } = injected
+  const authorityRegistry = injected.authorityRegistry
+  const authorityRouter = injected.authorityRouter
+  const authoritySnapshot = useSyncExternalStore(
+    listener => authorityRegistry?.subscribe(listener) ?? (() => undefined),
+    () => authorityRegistry?.getSnapshot() ?? EMPTY_AUTHORITY_SNAPSHOT,
+  )
+  const [configAuthority, setConfigAuthority] = useState(
+    authorityRouter?.getConfigAuthority() ?? '',
+  )
+  const readyAuthorities = authoritySnapshot.ids.filter(id => authoritySnapshot.states[id] === 'ready')
+  useEffect(() => {
+    if (configAuthority !== '' && !readyAuthorities.includes(configAuthority)) {
+      setConfigAuthority('')
+      authorityRouter?.setConfigAuthority(undefined)
+      void controller.load()
+    }
+  }, [configAuthority, readyAuthorities, authorityRouter, controller])
   const state = injected.useSnapshot(snapshot => snapshot)
   const [editing, setEditing] = useState<EditorTarget | undefined>(undefined)
   const [adding, setAdding] = useState(false)
@@ -285,6 +321,24 @@ function Loaded({ injected }: { injected: ModelsSectionFace }): ReactNode {
     <div className={styles['section']}>
       <h2 className={styles['title']}>{t('title')}</h2>
       <p className={styles['intro']}>{t('intro')}</p>
+      {authorityRouter === undefined ? null : <div className={styles['authorityPicker']}>
+        <label className={styles['authorityLabel']} htmlFor="models-authority">{t('authority')}</label>
+        <select
+          id="models-authority"
+          className={`${styles['input']} ${styles['selectInput']}`}
+          value={configAuthority}
+          aria-label={t('authority')}
+          onChange={(event) => {
+            const value = event.target.value
+            setConfigAuthority(value)
+            authorityRouter.setConfigAuthority(value === '' ? undefined : value)
+            void controller.load()
+          }}
+        >
+          <option value="">{t('localAuthority')}</option>
+          {readyAuthorities.map(id => <option key={id} value={id}>{id}</option>)}
+        </select>
+      </div>}
       {!state.writable && state.status === 'ready' ? <p className={styles['notice']}>{t('readOnly')}</p> : null}
       {savedIdentity === undefined
         ? null

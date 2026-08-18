@@ -49,6 +49,7 @@ export class AuthorityApiRouter {
   /** Routed API surface consumed by the ordinary Session and Workspace runtimes. */
   readonly api: IApiClient
   private directoryAuthority: string | undefined
+  private configAuthority: string | undefined
   private readonly rpcAuthorities = new Map<string, string>()
 
   /**
@@ -80,6 +81,22 @@ export class AuthorityApiRouter {
    */
   setDirectoryAuthority(authority: string | undefined): void {
     this.directoryAuthority = authority
+  }
+
+  /**
+   * Select the authority used by settings, credentials, and model requests.
+   * @param authority - connected provider id; undefined selects the primary Host.
+   */
+  setConfigAuthority(authority: string | undefined): void {
+    this.configAuthority = authority
+  }
+
+  /**
+   * Return the currently selected configuration authority.
+   * @returns the connected provider id, or undefined for the primary Host.
+   */
+  getConfigAuthority(): string | undefined {
+    return this.configAuthority
   }
 
   /**
@@ -130,7 +147,10 @@ export class AuthorityApiRouter {
       || (domain === 'workspace' && method === 'create')
       ? this.directoryAuthority
       : undefined
-    const target = routed?.authorityId ?? directoryAuthority
+    const configAuthority = domain === 'settings' || domain === 'credentials' || domain === 'llm'
+      ? this.configAuthority
+      : undefined
+    const target = routed?.authorityId ?? directoryAuthority ?? configAuthority
     const api = target === undefined ? this.local : this.registry.get(target)?.api
     if (api === undefined) throw new Error(`authority is not connected: ${target ?? 'unknown'}`)
     const request = routed === undefined && target === undefined ? payload : mapIds(payload, unwrapId)

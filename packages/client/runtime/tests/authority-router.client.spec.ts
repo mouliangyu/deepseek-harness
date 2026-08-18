@@ -83,4 +83,22 @@ describe('AuthorityApiRouter', () => {
     expect(remoteRespond).toHaveBeenCalledOnce()
     expect(localRespond).not.toHaveBeenCalled()
   })
+
+  it('routes configuration APIs to the selected authority', async () => {
+    const localDescribe = vi.fn(async () => ({ result: { ok: true, value: { namespaces: [] } } }))
+    const remoteDescribe = vi.fn(async () => ({ result: { ok: true, value: { namespaces: [] } } }))
+    const router = new AuthorityApiRouter(
+      api({ settings: { describe: localDescribe } as never }),
+      await registry(api({ settings: { describe: remoteDescribe } as never })),
+    )
+
+    await router.api.settings.describe({})
+    router.setConfigAuthority('remote-a')
+    await router.api.settings.describe({})
+    router.setConfigAuthority(undefined)
+    await router.api.settings.describe({})
+
+    expect(localDescribe).toHaveBeenCalledTimes(2)
+    expect(remoteDescribe).toHaveBeenCalledOnce()
+  })
 })

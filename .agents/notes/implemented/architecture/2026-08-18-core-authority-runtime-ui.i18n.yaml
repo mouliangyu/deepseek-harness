@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-18-core-authority-runtime-ui.md
-2026-08-18-core-authority-runtime-ui.md: 1ea30fae0b06db9758f6af3c5f6a02e496750073
-2026-08-18-core-authority-runtime-ui.zh.md: ef6b7ba1f0eb5b59abf6040d946fae853e59b490
+2026-08-18-core-authority-runtime-ui.md: 52aee309bb469f2f50a1afc6e2213375f3f40676
+2026-08-18-core-authority-runtime-ui.zh.md: 2997d7b589f3506df31d94bcbb1de83f34067d9e

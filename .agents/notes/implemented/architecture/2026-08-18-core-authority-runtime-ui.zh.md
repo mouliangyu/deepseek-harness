@@ -14,6 +14,8 @@ Authority registry 与 API router 可以连接额外的 DSH，但 client runtime
 
 `dsh-remote` 保持为 provider 插件。它发现 SSH alias、启动或复用官方远端 Web Host、转发官方 HTTP/WebSocket 协议，并注册生成的 `IApiClient`。它不再替换 runtime 或 Workspace UI 包。
 
+不携带 session 或 workspace id 的配置 API 使用共享 router 中显式选择的配置 authority 作用域。模型设置页可以选择本地或 ready provider，因此凭据与模型设置会写入目标 authority 的官方 DSH。
+
 ## Alternatives considered
 
 **在第三方仓库继续维护复制的 runtime 与 UI 包。** 拒绝，因为复制包包含几乎完整的官方 client surface，每次上游变更都需要同步修复。

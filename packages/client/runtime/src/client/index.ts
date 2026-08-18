@@ -183,6 +183,8 @@ declare module '@deepseek-ai/cordis' {
     sessions: import('./contract/sessions.ts').ISessions
     /** The outward face only; the concrete service stays inside the runtime. */
     workspaces: import('./contract/workspaces.ts').IWorkspaces
+    /** Routes configuration API calls to the selected local or remote authority. */
+    authorityRouter: import('./authority-router.ts').AuthorityApiRouter
   }
 }
 
@@ -201,6 +203,7 @@ export function apply(ctx: Context): void {
   const connection = ctx.get('connection') as ConnectionHandle
   const authorities = ctx.get('authorityRegistry') as AuthorityRegistry
   const router = new AuthorityApiRouter(connection.api, authorities)
+  ctx.provide('authorityRouter', router)
   ctx.effect(() => connection.routeApi(router.api), 'runtime: top-level authority API router')
   const sessions = new SessionRuntime(ctx, router.api, ctx.remote, conversation)
   ctx.typert.contexts.registerClient('agent', {

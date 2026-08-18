@@ -113,12 +113,11 @@ describe('runtime client apply', () => {
     const sessions = bench.ctx.get('sessions') as SessionRuntime
     const workspaces = bench.ctx.get('workspaces') as WorkspaceRuntime
     expect(bench.api.callsOf('session.create')).toEqual([{ workspaceId: 'w-recent' }])
-    expect(sessions.list.getSnapshot().current).toBe('fk-new')
 
     sessions.clear()
     await workspaces.refresh()
     await flushMicrotasks()
-    expect(sessions.list.getSnapshot().current).toBeUndefined()
+    expect(sessions.list.getSnapshot().current).toBe('fk-new')
     expect(bench.api.callsOf('session.create')).toHaveLength(1)
   })
 

@@ -36,7 +36,11 @@ async function bench() {
     create, startSession, rename, insertSessionBefore, setDirectoryAuthority,
   } as never)
   ctx.provide('sessions', { open, clear, search, searchResultLimit: 20, binding, fork } as never)
+  ctx.provide('connection', {
+    hostDescription: { getSnapshot: () => undefined, subscribe: () => () => {} },
+  } as never)
   const locale = new LocaleRuntime(ctx)
+  locale.setLocale('zh')
   ctx.provide('locale', locale)
   ctx.provide('authorityRegistry', new AuthorityRegistry())
   return {

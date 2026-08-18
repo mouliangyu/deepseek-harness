@@ -14,6 +14,8 @@ The authority registry and API router can connect an additional DSH host, but th
 
 `dsh-remote` remains a provider plugin. It discovers SSH aliases, starts or reuses the official remote Web Host, forwards the official HTTP/WebSocket protocol, and registers the resulting `IApiClient`. It does not replace the runtime or Workspace UI packages.
 
+Configuration APIs without a session or workspace id use an explicit configuration authority scope in the shared router. The Models settings page selects local or a ready provider, so credentials and model settings are written to the intended official DSH.
+
 ## Alternatives considered
 
 **Keep copied runtime and UI packages in a third-party repository.** Rejected because the copies track almost the entire official client surface and require synchronized fixes for every upstream change.

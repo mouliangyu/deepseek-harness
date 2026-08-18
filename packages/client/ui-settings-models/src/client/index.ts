@@ -8,6 +8,7 @@
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
+import type { AuthorityRegistry } from '@deepseek-ai/dsh-client-connection/client'
 // Type-only: pulls the shell's SlotMap merge (the 'settings.section' entry).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
@@ -16,7 +17,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // (settings/credentials invalidations ride the allowlist) into this program.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import { ModelsSection } from './ModelsSection.tsx'
-import type { ModelsSectionInjected } from './ModelsSection.tsx'
+import type { ConfigAuthorityRouter, ModelsSectionInjected } from './ModelsSection.tsx'
 import { DeepSeekOnboardingDialog } from './DeepSeekOnboardingDialog.tsx'
 import type { DeepSeekOnboardingInjected } from './DeepSeekOnboardingDialog.tsx'
 import { WelcomeNotice } from './WelcomeNotice.tsx'
@@ -70,6 +71,8 @@ export function apply(ctx: ClientContext): void {
   const connection = ctx.get('connection') as ConnectionHandle
   const schema = createSettingsSchemaOperations(ctx.settingsSchema)
   const controller = new ModelsSettingsStore(connection.api, schema, ctx.settingsScope.describe())
+  const authorityRegistry = ctx.get('authorityRegistry') as AuthorityRegistry | undefined
+  const authorityRouter = ctx.get('authorityRouter') as ConfigAuthorityRouter | undefined
   // Registration-time text (the nav label thunk) and the inject faces share
   // one bound translate; copy freshness rides the locale revision.
   const t = ctx.locale.bind(NS) as ModelsSectionInjected['t']
@@ -78,6 +81,8 @@ export function apply(ctx: ClientContext): void {
     hooks: { snapshot: controller.store },
     api: connection.api,
     schema,
+    ...authorityRegistry === undefined ? {} : { authorityRegistry },
+    ...authorityRouter === undefined ? {} : { authorityRouter },
     t,
   })
   const deepSeekOnboardingInjected = (): DeepSeekOnboardingInjected => ({

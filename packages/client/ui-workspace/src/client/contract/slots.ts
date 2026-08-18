@@ -93,6 +93,10 @@ export type DirectoryPickingHooks = PropsHooks<DirectoryPickingInjected['hooks']
  * browsing region drives.
  */
 export type WorkspaceBrowserInjected = {
+  /** Registered authorities offered by the add-Workspace menu. */
+  authorityRegistry: AuthorityRegistry
+  /** Select the Host used by directory browsing and Workspace creation. */
+  selectDirectoryAuthority: (authorityId?: string) => void
   hooks: DirectoryPickingInjected['hooks'] & {
     /** Current generation's Host description, bound by the slot renderer. */
     hostDescription: HostDescriptionSource
