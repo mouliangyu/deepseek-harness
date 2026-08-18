@@ -15,6 +15,11 @@ export interface IWorkspaces {
   /** The useWorkspaces standard feed (read face — writes stay inside the domain). */
   readonly list: ObservableSnapshot<WorkspaceListState>
   /**
+   * Select the Host used by the next directory browse and Workspace create flow.
+   * @param authorityId - additional authority id; undefined selects the primary Host.
+   */
+  setDirectoryAuthority(authorityId?: string): void
+  /**
    * Connect a Workspace to its reusable or freshly created blank session.
    * @param workspaceId - target workspace.
    * @returns the connected session id.

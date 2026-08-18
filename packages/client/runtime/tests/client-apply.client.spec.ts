@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ConnectionSinks } from '@deepseek-ai/dsh-api-remotes/client'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-host-apiproxy/api'
+import { AuthorityRegistry } from '@deepseek-ai/dsh-client-connection/client'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import * as RuntimeClient from '../src/client/index.ts'
 import type { ConversationNodeDefinition } from '../src/client/contract/conversation.ts'
@@ -45,6 +46,7 @@ async function mount(): Promise<Bench> {
     },
   }
   ctx.reflect.provide('connection', handle)
+  ctx.reflect.provide('authorityRegistry', new AuthorityRegistry())
   ctx.reflect.provide('remote', {})
   ctx.reflect.provide('remote.commands', fakeRemote().commands)
   await ctx.plugin(RuntimeClient).await()

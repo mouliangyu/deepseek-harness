@@ -15,6 +15,7 @@ import {
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import { abbreviateHomePath } from '@deepseek-ai/dsh-client-runtime/client'
 import type { WorkspaceBrowserProps } from '../contract/slots.ts'
+import { authorityOf } from '@deepseek-ai/dsh-client-runtime/client'
 import type { GroupNode, SearchResultNode, SessionNode } from '../tree.ts'
 import { relativeTime } from '../tree.ts'
 import css from './Rows.module.css'
@@ -124,6 +125,7 @@ export function ProjectRowItem({ group, onToggle, onCreate, actions, drag, home,
   const row = group
   // The ungrouped bucket has no workspace title: its label is dictionary copy.
   const label = row.workspaceId === undefined ? t('group.ungrouped') : row.label
+  const authority = row.workspaceId === undefined ? undefined : authorityOf(row.workspaceId)
   const active = group.expanded && group.containsCurrent
   const [menuOpen, setMenuOpen] = useState(false)
   const workspaceMenuItems = [
@@ -153,7 +155,10 @@ export function ProjectRowItem({ group, onToggle, onCreate, actions, drag, home,
         <IconTriangleRightFill14 className={clsx(css.arrow, row.expanded && css.arrowOpen)} />
       </span>
       <span className={css.projectText}>
-        <span className={css.title}>{label}</span>
+        <span className={css.projectTitleLine}>
+          <span className={css.title}>{label}</span>
+          {authority === undefined ? null : <span className={css.authority}>{authority}</span>}
+        </span>
       </span>
       <span className={css.rowActions}>
         {actions !== undefined && (

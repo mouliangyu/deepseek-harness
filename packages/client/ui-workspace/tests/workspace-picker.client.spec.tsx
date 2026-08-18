@@ -10,6 +10,7 @@ import type { DirectoryFlowOwnerProps, WorkspacePickerProps } from '../src/clien
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
 import { WorkspacePicker } from '../src/client/WorkspacePicker.tsx'
 import { zh } from '../src/client/locales.ts'
+import { AuthorityRegistry } from '@deepseek-ai/dsh-client-connection/client'
 
 afterEach(cleanup)
 
@@ -85,6 +86,8 @@ function mount(
   const onPick = vi.fn()
   const onClose = vi.fn()
   const anchorRef = anchor()
+  const authorityRegistry = new AuthorityRegistry()
+  const selectDirectoryAuthority = vi.fn()
   const { probe, renderSlot } = flowProbe()
   const renderPicker = (nextItems: readonly WorkspaceView[]) => (
     <WorkspacePicker
@@ -95,6 +98,8 @@ function mount(
       onPick={onPick}
       onClose={onClose}
       createWorkspace={createWorkspace}
+      authorityRegistry={authorityRegistry}
+      selectDirectoryAuthority={selectDirectoryAuthority}
       useDirectoryFlow={occupancy.useDirectoryFlow}
       renderSlot={renderSlot}
       t={t}
@@ -104,16 +109,36 @@ function mount(
     renderPicker(items),
   )
   return {
-    view, onPick, onClose, createWorkspace, probe, occupancy,
+    view, onPick, onClose, createWorkspace, probe, occupancy, authorityRegistry, selectDirectoryAuthority,
     rerenderItems: (nextItems: readonly WorkspaceView[]) => { view.rerender(renderPicker(nextItems)) },
   }
 }
 
 function chooseAdd(): void {
-  fireEvent.click(screen.getByRole('menuitem', { name: '添加工作区…' }))
+  fireEvent.click(screen.getByRole('menuitem', { name: '添加本地工作区…' }))
 }
 
 describe('WorkspacePicker', () => {
+  it('offers each ready authority and selects it for the directory flow', async () => {
+    const b = mount([workspace('alpha', 'Alpha')])
+    b.authorityRegistry.register({
+      id: 'remote-a',
+      kind: 'test',
+      connect: async () => ({
+        api: {} as never,
+        state: 'ready',
+        subscribe: () => () => undefined,
+        close: async () => undefined,
+      }),
+    })
+    await act(async () => { await b.authorityRegistry.connect('remote-a') })
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '在 remote-a 上添加工作区…' }))
+
+    expect(b.selectDirectoryAuthority).toHaveBeenCalledWith('remote-a')
+    expect(screen.getByTestId('directory-flow')).toBeTruthy()
+  })
+
   it('lists same-title Workspaces separately and forwards the selected id', () => {
     const b = mount([workspace('alpha', 'Shared'), workspace('beta', 'Shared')])
     const entries = screen.getAllByRole('menuitem', { name: 'Shared' })
@@ -142,7 +167,7 @@ describe('WorkspacePicker', () => {
     // choice, so the owner's open request lands in the flow itself.
     const b = mount([])
     expect(screen.queryByRole('menu')).toBeNull()
-    expect(screen.queryByRole('menuitem', { name: '添加工作区…' })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: '添加本地工作区…' })).toBeNull()
     expect(b.onClose).toHaveBeenCalled()
     expect(screen.getByTestId('directory-flow')).toBeTruthy()
   })
@@ -180,11 +205,11 @@ describe('WorkspacePicker', () => {
     // The flow is open but nothing is picked yet: a chooser pending on the
     // host display must already block concurrent workspace actions.
     expect(screen.getByRole<HTMLButtonElement>('menuitem', { name: 'Alpha' }).disabled).toBe(true)
-    expect(screen.getByRole<HTMLButtonElement>('menuitem', { name: '添加工作区…' }).disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('menuitem', { name: '添加本地工作区…' }).disabled).toBe(true)
     act(() => { b.probe.owner!.onPicked('/tmp/project') })
     expect(b.probe.owner!.busy).toBe(true)
     expect(screen.getByRole<HTMLButtonElement>('menuitem', { name: 'Alpha' }).disabled).toBe(true)
-    expect(screen.getByRole<HTMLButtonElement>('menuitem', { name: '添加工作区…' }).disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('menuitem', { name: '添加本地工作区…' }).disabled).toBe(true)
     await act(async () => { resolve(created); await pending })
     expect(b.probe.owner!.busy).toBe(false)
   })
@@ -212,6 +237,7 @@ describe('WorkspacePicker', () => {
       <WorkspacePicker
         open useSessions={hook(sessions)} useWorkspaces={hook(workspaceState([workspace('alpha', 'Alpha')]))}
         onPick={vi.fn()} onClose={vi.fn()} createWorkspace={vi.fn()}
+        authorityRegistry={new AuthorityRegistry()} selectDirectoryAuthority={vi.fn()}
         useDirectoryFlow={occupancySource().useDirectoryFlow} renderSlot={renderSlot} t={t}
       />,
     )
@@ -227,6 +253,7 @@ describe('WorkspacePicker', () => {
       <WorkspacePicker
         open anchorRef={anchor()} useSessions={hook(sessions)} useWorkspaces={hook(state)}
         onPick={vi.fn()} onClose={vi.fn()} createWorkspace={vi.fn()}
+        authorityRegistry={new AuthorityRegistry()} selectDirectoryAuthority={vi.fn()}
         useDirectoryFlow={occupancySource().useDirectoryFlow} renderSlot={renderSlot} t={t}
       />,
     )
@@ -234,7 +261,7 @@ describe('WorkspacePicker', () => {
     // would pre-empt the workspaces about to arrive.
     expect(screen.getByRole('status').textContent).toBe('正在加载工作区…')
     expect(screen.queryByTestId('directory-flow')).toBeNull()
-    expect(screen.getByRole('menuitem', { name: '添加工作区…' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '添加本地工作区…' })).toBeTruthy()
   })
 
   it('shows no popover at all when nothing is listed and nothing can be added', () => {
@@ -268,15 +295,15 @@ describe('WorkspacePicker', () => {
   it('hides the add entry while the directory-flow hole is empty', () => {
     mount([workspace('alpha', 'Alpha')], vi.fn(), occupancySource(false))
     expect(screen.getByRole('menuitem', { name: 'Alpha' })).toBeTruthy()
-    expect(screen.queryByRole('menuitem', { name: '添加工作区…' })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: '添加本地工作区…' })).toBeNull()
   })
 
   it('shows the add entry when a flow package activates after the first paint', () => {
     const b = mount([workspace('alpha', 'Alpha')], vi.fn(), occupancySource(false))
-    expect(screen.queryByRole('menuitem', { name: '添加工作区…' })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: '添加本地工作区…' })).toBeNull()
     // Registration changes flow through the subscription, no re-render needed.
     act(() => { b.occupancy.flip(true) })
-    expect(screen.getByRole('menuitem', { name: '添加工作区…' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '添加本地工作区…' })).toBeTruthy()
   })
 
   it('keeps Choose again inert while the flow occupant is gone, and snaps back a flow opened over an empty hole', async () => {
@@ -302,6 +329,6 @@ describe('WorkspacePicker', () => {
     act(() => { b.occupancy.flip(false) })
     expect(b.probe.owner!.open).toBe(false)
     expect(screen.getByRole<HTMLButtonElement>('menuitem', { name: 'Alpha' }).disabled).toBe(false)
-    expect(screen.queryByRole('menuitem', { name: '添加工作区…' })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: '添加本地工作区…' })).toBeNull()
   })
 })

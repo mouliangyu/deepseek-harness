@@ -9,7 +9,7 @@
  * occupant's own create-folder affordance already covers creating one.
  */
 import type { ReactNode, RefObject } from 'react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import {
   Button, IconFolderClose16, IconPlusOutline16, Menu, Modal, type MenuEntry,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -20,7 +20,8 @@ import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { DirectoryFlowOwnerProps, WorkspacePickerProps } from './contract/slots.ts'
 import css from './WorkspacePicker.module.css'
 
-const ADD_WORKSPACE = '::add-workspace'
+const ADD_LOCAL_WORKSPACE = '::add-workspace/local'
+const ADD_REMOTE_PREFIX = '::add-workspace/remote/'
 
 /** Core flow props: the owner supplies popover control and pick semantics. */
 export interface WorkspacePickFlowProps {
@@ -34,6 +35,10 @@ export interface WorkspacePickFlowProps {
   useWorkspaces: <S>(selector: (state: WorkspaceListState) => S) => S
   /** Adopt a picked host directory as a real Workspace. */
   createWorkspace: (input: { path: string }) => Promise<WorkspaceView>
+  /** Registry supplying connected additional authorities. */
+  authorityRegistry: WorkspacePickerProps['authorityRegistry']
+  /** Select the Host used by directory and create operations. */
+  selectDirectoryAuthority: WorkspacePickerProps['selectDirectoryAuthority']
   /** Bound occupancy selector hook for this surface's directory-flow hole (empty leaves the surface with no add action). */
   useDirectoryFlow: SnapshotSelectorHook<boolean>
   /** Render this surface's directory-flow hole with the owner conversation (the entry's narrowed renderSlot). */
@@ -61,6 +66,8 @@ export function WorkspacePickFlow({
   anchorRef,
   useWorkspaces,
   createWorkspace,
+  authorityRegistry,
+  selectDirectoryAuthority,
   useDirectoryFlow,
   renderDirectoryFlow,
   onPick,
@@ -70,6 +77,11 @@ export function WorkspacePickFlow({
   selectedId,
 }: WorkspacePickFlowProps) {
   const workspaceSnapshot = useWorkspaces(state => state)
+  const authoritySnapshot = useSyncExternalStore(
+    listener => authorityRegistry.subscribe(listener),
+    () => authorityRegistry.getSnapshot(),
+  )
+  const readyAuthorities = authoritySnapshot.ids.filter(id => authoritySnapshot.states[id] === 'ready')
   const workspaces = workspaceSnapshot.items
   const getAnchorRect = useCallback(
     () => anchorRef?.current?.getBoundingClientRect() ?? null,
@@ -99,7 +111,20 @@ export function WorkspacePickFlow({
     if (flowOpen && !flowAvailable) setFlowOpen(false)
   }, [flowOpen, flowAvailable])
   const addEntries: MenuEntry[] = flowAvailable
-    ? [{ id: ADD_WORKSPACE, label: t('menu.addWorkspace'), icon: <IconPlusOutline16 size={16} />, disabled: flowBusy }]
+    ? [
+      {
+        id: ADD_LOCAL_WORKSPACE,
+        label: t('menu.addLocalWorkspace'),
+        icon: <IconPlusOutline16 size={16} />,
+        disabled: flowBusy,
+      },
+      ...readyAuthorities.map(id => ({
+        id: `${ADD_REMOTE_PREFIX}${id}`,
+        label: t('menu.addRemoteWorkspace').replace('{remote}', id),
+        icon: <IconPlusOutline16 size={16} />,
+        disabled: flowBusy,
+      })),
+    ]
     : []
   // With workspaces listed, the add action pins below the scroll region
   // (divider + always visible); otherwise it IS the menu.
@@ -133,12 +158,13 @@ export function WorkspacePickFlow({
       setErrorOpen(true)
     })
 
-  const openDirectoryFlow = useCallback((): void => {
+  const openDirectoryFlow = useCallback((authorityId?: string): void => {
+    selectDirectoryAuthority(authorityId)
     onClose()
     setErrorOpen(false)
     setModalError(null)
     setFlowOpen(true)
-  }, [onClose])
+  }, [onClose, selectDirectoryAuthority])
 
   // A menu exists to disambiguate between targets. With no workspaces listed
   // and the add action the only entry left, the anchor gesture IS that action:
@@ -153,7 +179,7 @@ export function WorkspacePickFlow({
   // `flowBusy` gates this exactly as it disables the equivalent menu entry: a
   // pick still being adopted owns the surface until it settles.
   useEffect(() => {
-    if (open && addIsTheOnlyEntry && !flowBusy) openDirectoryFlow()
+    if (open && addIsTheOnlyEntry && !flowBusy) openDirectoryFlow(undefined)
   }, [open, addIsTheOnlyEntry, flowBusy, openDirectoryFlow])
 
   /** Owner side of the flow conversation: adopt keeps the flow open (busy) until the Host answers. */
@@ -173,8 +199,12 @@ export function WorkspacePickFlow({
   }
 
   const handleSelect = (id: string): void => {
-    if (id === ADD_WORKSPACE) {
-      openDirectoryFlow()
+    if (id === ADD_LOCAL_WORKSPACE) {
+      openDirectoryFlow(undefined)
+      return
+    }
+    if (id.startsWith(ADD_REMOTE_PREFIX)) {
+      openDirectoryFlow(id.slice(ADD_REMOTE_PREFIX.length))
       return
     }
     onPick(id as WorkspaceId)
@@ -206,7 +236,7 @@ export function WorkspacePickFlow({
             <Button variant="outline" className={css.modalAction} onClick={closeModal}>{t('cancel')}</Button>
             {/* Retrying needs an occupant to serve the flow; without one the
               * button would open a flow nobody can answer or cancel. */}
-            <Button variant="primary" className={css.modalAction} disabled={!flowAvailable} onClick={openDirectoryFlow}>{t('folderError.retry')}</Button>
+            <Button variant="primary" className={css.modalAction} disabled={!flowAvailable} onClick={() => { openDirectoryFlow(undefined) }}>{t('folderError.retry')}</Button>
           </>
         )}
       >
@@ -230,6 +260,8 @@ export function WorkspacePicker({
   onPick,
   onClose,
   createWorkspace,
+  authorityRegistry,
+  selectDirectoryAuthority,
   useDirectoryFlow,
   renderSlot,
   t,
@@ -241,6 +273,8 @@ export function WorkspacePicker({
       anchorRef={anchorRef}
       useWorkspaces={useWorkspaces}
       createWorkspace={createWorkspace}
+      authorityRegistry={authorityRegistry}
+      selectDirectoryAuthority={selectDirectoryAuthority}
       useDirectoryFlow={useDirectoryFlow}
       renderDirectoryFlow={owner => renderSlot('conversation.hero.workspace.directoryFlow', owner)}
       selectedId={selectedId}

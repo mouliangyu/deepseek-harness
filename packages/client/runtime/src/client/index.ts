@@ -1,6 +1,6 @@
 /** Browser runtime services for slots, sessions, workspaces, and connection-stream delivery. */
 import type { Context } from '@deepseek-ai/cordis'
-import type { ConnectionHandle, SessionId } from '@deepseek-ai/dsh-api-remotes/client'
+import type { AuthorityRegistry, ConnectionHandle, SessionId } from '@deepseek-ai/dsh-client-connection/client'
 // Type-only: the ctx.remote merge. Deliberately the gateway's Client half rather
 // than api-remotes': that face imports a Host-tsdown-generated artifact, and this
 // project sits in the Host build graph.
@@ -15,6 +15,13 @@ import type { ConversationSnapshot } from './sessions/conversation.ts'
 import type { UseProjection } from './sessions/projection-store.ts'
 import { ConversationEventRegistry } from './conversation/event-registry.ts'
 import { ConversationViewRegistry } from './conversation/view-registry.ts'
+import { AuthorityApiRouter } from './authority-router.ts'
+import { AuthorityStreams } from './authority-streams.ts'
+
+export { authorityId, authorityOf, parseAuthorityId } from './authority-router.ts'
+export { AuthorityApiRouter } from './authority-router.ts'
+export { AuthorityStreams } from './authority-streams.ts'
+export type { AuthorityStreamSinks } from './authority-streams.ts'
 
 export { isAppendSurfaceEvent, isReplacementSurfaceEvent } from '@deepseek-ai/dsh-session/surface'
 
@@ -180,7 +187,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /** Required services: the wire handle and Client Typert registry. */
-export const inject = ['connection', 'typert', 'remote', 'remote.commands']
+export const inject = ['connection', 'authorityRegistry', 'typert', 'remote', 'remote.commands']
 
 /** Mounts the browser runtime services and connection stream.
  * @param ctx - Client Cordis context.
@@ -192,11 +199,14 @@ export function apply(ctx: Context): void {
     views: new ConversationViewRegistry(ctx),
   }
   const connection = ctx.get('connection') as ConnectionHandle
-  const sessions = new SessionRuntime(ctx, connection.api, ctx.remote, conversation)
+  const authorities = ctx.get('authorityRegistry') as AuthorityRegistry
+  const router = new AuthorityApiRouter(connection.api, authorities)
+  ctx.effect(() => connection.routeApi(router.api), 'runtime: top-level authority API router')
+  const sessions = new SessionRuntime(ctx, router.api, ctx.remote, conversation)
   ctx.typert.contexts.registerClient('agent', {
     identity: candidate => sessions.scopeOf(candidate),
   })
-  const workspaces = new WorkspaceRuntime(ctx, connection.api, sessions)
+  const workspaces = new WorkspaceRuntime(ctx, router.api, sessions, router)
   ctx.effect(
     () => workspaces.startInitialSelection(),
     'runtime: initial Workspace selection',
@@ -230,4 +240,19 @@ export function apply(ctx: Context): void {
     },
   })
   ctx.effect(() => () => { loop.stop() }, 'runtime: connection stream loop')
+  const authorityStreams = new AuthorityStreams(authorities, router, {
+    onMuxEnvelope: (envelope) => { sessions.handleMuxEnvelope(envelope) },
+    onHostEnvelope: (envelope) => {
+      sessions.handleHostEnvelope(envelope)
+      workspaces.handleHostEnvelope(envelope)
+      const frame = envelope.payload
+      if (frame.type === 'host/remote-event') ctx.remote.$dispatch(frame.event, frame.args)
+    },
+    onConnected: () => {
+      sessions.handleConnected()
+      workspaces.handleConnected()
+    },
+  })
+  authorityStreams.start()
+  ctx.effect(() => () => { authorityStreams.stop() }, 'runtime: authority streams')
 }

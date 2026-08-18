@@ -32,6 +32,7 @@ import type {
   SessionId, SessionSearchResultItem, WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { createWorkspaceViewStore } from '../stores.ts'
+import type { AuthorityRegistry } from '@deepseek-ai/dsh-client-connection/client'
 
 /**
  * Owner share of the directory-flow holes: the complete conversation between
@@ -77,6 +78,10 @@ export type DirectoryPickingInjected = {
     /** True while this surface's directory-flow hole is occupied. */
     directoryFlow: HostObservable<boolean>
   }
+  /** Registered authorities offered by the add-Workspace menu. */
+  authorityRegistry: AuthorityRegistry
+  /** Select the Host used by the directory flow and following Workspace create. */
+  selectDirectoryAuthority: (authorityId?: string) => void
 }
 
 /** Component-side view of the picking share: the bound occupancy selector hook. */

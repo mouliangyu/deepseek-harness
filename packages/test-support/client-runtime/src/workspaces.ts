@@ -31,6 +31,15 @@ export class TestWorkspaces implements IWorkspaces {
   }
 
   /**
+   * Select a directory authority (recorded; stubbed behavior runs when installed).
+   * @param authorityId - additional authority id, or undefined for the primary Host.
+   */
+  setDirectoryAuthority(authorityId?: string): void {
+    this.calls.push({ method: 'setDirectoryAuthority', args: [authorityId] })
+    this.stubs.get('setDirectoryAuthority')?.(authorityId)
+  }
+
+  /**
    * Update the workspace list state through an immer draft.
    * @param mutate - draft mutator.
    */

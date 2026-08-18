@@ -10,6 +10,7 @@ import { createSnapshotStore } from '../contract/store.ts'
 import type { SessionsPort, SessionsPortList } from '../contract/sessions-port.ts'
 import type { IWorkspaces } from '../contract/workspaces.ts'
 import { WorkspaceManager, type WorkspaceListPhase } from './manager.ts'
+import type { AuthorityApiRouter } from '../authority-router.ts'
 
 /** Workspace list plus the two-baseline readiness and default-target projection. */
 export interface WorkspaceListState {
@@ -62,8 +63,14 @@ export class WorkspaceRuntime implements IWorkspaces {
    * @param ctx - client root context.
    * @param api - shared wire client.
    * @param sessions - cross-domain sessions face used for recency and blank-session reuse.
+   * @param router - authority router used to select a directory Host.
    */
-  constructor(ctx: Context, private readonly api: IApiClient, private readonly sessions: SessionsPort) {
+  constructor(
+    ctx: Context,
+    private readonly api: IApiClient,
+    private readonly sessions: SessionsPort,
+    private readonly router?: AuthorityApiRouter,
+  ) {
     this.manager = new WorkspaceManager(api)
     this.list = createSnapshotStore<WorkspaceListState>({
       items: [], archivedSessionIds: [], state: 'idle', phase: 'pending', error: null,
@@ -72,6 +79,11 @@ export class WorkspaceRuntime implements IWorkspaces {
     this.manager.subscribe(() => { this.project() })
     this.sessions.list.subscribe(() => { this.project() })
     ctx.reflect.provide('workspaces', this, undefined)
+  }
+
+  /** @inheritdoc */
+  setDirectoryAuthority(authorityId?: string): void {
+    this.router?.setDirectoryAuthority(authorityId)
   }
 
   /**

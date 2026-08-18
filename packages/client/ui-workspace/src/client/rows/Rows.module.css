@@ -171,6 +171,20 @@
   gap: 2px;
 }
 
+.projectTitleLine {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.authority {
+  margin-left: 6px;
+  flex: none;
+  color: var(--text-tertiary, #737b8c);
+  font-size: 11px;
+  line-height: 16px;
+}
+
 .title {
   min-width: 0;
   overflow: hidden;
