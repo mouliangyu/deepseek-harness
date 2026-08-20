@@ -247,7 +247,9 @@ export function apply(ctx: Context, config: Config = {}): void {
  * Model-facing catalog section text: the ordered name-and-description list and
  * the trigger rule. The rule is mandatory and accountable — matching a skill's
  * description obligates its use, and skipping an obvious match requires an
- * explanation — rather than an optional reminder.
+ * explanation — rather than an optional reminder. Loading a skill obligates
+ * consulting it at every later decision point the skill governs, so a loaded
+ * skill stays authoritative instead of becoming background context.
  */
 function renderCatalogSection(entries: CatalogEntries, maxBytes: number | undefined): string {
   const body = (list: CatalogEntries): string => [
@@ -258,6 +260,7 @@ function renderCatalogSection(entries: CatalogEntries, maxBytes: number | undefi
     '</available_skills>',
     '',
     "If the user names a skill, or the task clearly matches a skill's description, you MUST use that skill this turn. Announce which skills you are using and why. If you skip an obviously-matching skill, say why. Do not carry skills across turns unless re-mentioned. Call the `skill` tool with the exact skill name to load the full instructions before acting; the entries above are summaries only.",
+    'Loading a skill is not a one-time read: at every later decision point the skill governs — choosing an entry path, handling a mismatch or failure, picking a tool or environment — return to the loaded skill content and route from its instructions before acting. Do not fall back to generic habit while a loaded skill covers the situation; if the skill does not cover it, say so and ask rather than guess.',
     'A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the `skill` tool again for that skill.',
   ].join('\n')
   if (maxBytes === undefined) return body(entries)

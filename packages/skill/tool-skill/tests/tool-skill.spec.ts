@@ -151,6 +151,7 @@ describe('dsh-tool-skill', () => {
     expect(text).toContain('- `model-only-skill`: Model-only skill.')
     expect(text).toContain('- `z-skill`: Long description Long description Long descript...')
     expect(text).toContain("the task clearly matches a skill's description, you MUST use that skill this turn")
+    expect(text).toContain('return to the loaded skill content and route from its instructions before acting')
     expect(text).not.toContain('whenToUse')
     expect(text).not.toContain('secret-source')
     expect(text).not.toContain('/secret/path')
@@ -160,7 +161,7 @@ describe('dsh-tool-skill', () => {
 
   it('keeps every skill name and shortens descriptions to fit an aggregate byte budget', async () => {
     const home = await tempDir('tool-catalog-budget')
-    const ctx = await setup(home, { catalogMaxBytes: 1000 })
+    const ctx = await setup(home, { catalogMaxBytes: 1500 })
     ctx.skills.register({ name: 'first-skill', description: 'A'.repeat(400), source: 'runtime', content: 'body' })
     ctx.skills.register({ name: 'second-skill', description: 'B'.repeat(400), source: 'runtime', content: 'body' })
 
@@ -177,7 +178,7 @@ describe('dsh-tool-skill', () => {
     expect(text).not.toContain('B'.repeat(400))
     expect(text).toContain('A'.repeat(50))
     expect(text).toContain('B'.repeat(50))
-    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(1000)
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(1500)
   })
 
   it('omits the catalog section when no model-invocable skills are available', async () => {
