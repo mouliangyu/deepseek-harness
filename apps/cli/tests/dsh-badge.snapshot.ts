@@ -52,21 +52,14 @@ describe('dsh badge assembled snapshot', () => {
     `)
     expect(enabledSnapshot).toMatchInlineSnapshot(`
       {
-        "catalog": [
-          {
-            "text": "<system-reminder>
-      A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+        "catalog": "A skill is a reusable set of task-specific instructions. The following skills are available in this session:
 
       <available_skills>
       - \`dsh-badge\`: Add the official “powered by dsh” badge to documents, pull requests, merge requests, and other content produced with DeepSeek Harness. Use whenever creating a pull request or merge request. Also use when the user asks for a dsh badge, powered-by-dsh attribution, or a reusable dsh badge asset or snippet.
       </available_skills>
 
-      If the user names a skill, or the task clearly matches a skill's description, call the \`skill\` tool with the exact skill name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains summaries only; do not infer or follow a skill's instructions until it has been loaded.
-      A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the \`skill\` tool again for that skill.
-      </system-reminder>",
-            "type": "text",
-          },
-        ],
+      If the user names a skill, or the task clearly matches a skill's description, you MUST use that skill this turn. Announce which skills you are using and why. If you skip an obviously-matching skill, say why. Do not carry skills across turns unless re-mentioned. Call the \`skill\` tool with the exact skill name to load the full instructions before acting; the entries above are summaries only.
+      A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the \`skill\` tool again for that skill.",
         "result": {
           "content": [
             {

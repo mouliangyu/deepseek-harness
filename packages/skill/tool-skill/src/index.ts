@@ -1,12 +1,11 @@
 /**
- * Durable session skill catalog and model-facing `skill` loader tool.
+ * Per-step system-prompt skill catalog and model-facing `skill` loader tool.
  *
  * @module @deepseek-ai/dsh-tool-skill
  */
 
-import { createHash } from 'node:crypto'
-import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -26,31 +25,27 @@ export const inject = ['agents', 'tools', 'skills']
 
 const DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH = 500
 /**
- * Durable provider and item records for one published session skill catalog. The catalog is a
- * `catalog`-form context, so it records the entries it published beside the
- * model-facing prose: a consumer presenting the list must not re-parse the
- * `<available_skills>` block, whose framing exists for the model.
+ * Default aggregate cap for the rendered catalog section, in bytes. Kept at
+ * 20K bytes as a conservative guardrail; deployments with more skills override
+ * it. Descriptions are shortened, never names.
  */
-export interface SkillCatalogSource {
-  readonly kind: 'skill-catalog'
-  readonly form: 'catalog'
-  /** Marks a replacement catalog rather than this session's first publication. */
-  readonly update?: true
-  /** Exactly the entries this message published, in catalog order. */
-  readonly entries: readonly { readonly name: string; readonly description: string }[]
+const DEFAULT_CATALOG_MAX_BYTES = 20000
+/** System-prompt section name the catalog is injected under. */
+const CATALOG_SECTION_NAME = 'skill:catalog'
+
+/** One name-and-description entry rendered into the model-facing skill catalog. */
+interface SkillCatalogEntry {
+  readonly name: string
+  readonly description: string
 }
 
-declare module '@deepseek-ai/dsh-llm' {
-  interface MessageSourceMap {
-    'skill-catalog': SkillCatalogSource
-  }
-}
+type CatalogEntries = readonly SkillCatalogEntry[]
 
-/** Durable entry list mirroring the rendered catalog lines, for non-model consumers. */
+/** Entry list mirroring the rendered catalog lines, for non-model consumers. */
 function catalogSourceEntries(
   skills: SkillSummary[],
   descriptionMaxLength: number,
-): SkillCatalogSource['entries'] {
+): CatalogEntries {
   return skills.map(skill => ({
     name: skill.name,
     description: catalogDescription(skill.description, descriptionMaxLength),
@@ -61,22 +56,31 @@ function catalogSourceEntries(
 export interface Config {
   /** Maximum normalized description length rendered in the session catalog; minimum 3. */
   catalogDescriptionMaxLength?: number
+  /**
+   * Maximum total byte size of the rendered catalog section. When the section
+   * exceeds it, descriptions are shortened equally to fit; skill names are
+   * never truncated or dropped. Defaults to `20000`.
+   */
+  catalogMaxBytes?: number
 }
 
 /** Validate and default the model-facing skill catalog configuration. */
 export const Config: z<Config> = z.object({
   catalogDescriptionMaxLength: z.number().default(DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH),
+  catalogMaxBytes: z.number().default(DEFAULT_CATALOG_MAX_BYTES),
 })
 
 /**
- * Register the model-facing skill loader and its visibility-matched
- * durable session catalog. The catalog is emitted only when the calling agent
- * resolves this plugin's exact tool registration; a restriction or scoped
- * same-name shadow therefore removes both the schema and its call guidance.
+ * Register the model-facing skill loader and its per-step system-prompt
+ * catalog. The catalog is emitted only when the calling agent resolves this
+ * plugin's exact tool registration; a restriction or scoped same-name shadow
+ * therefore removes both the schema and its call guidance.
  */
 export function apply(ctx: Context, config: Config = {}): void {
   const catalogDescriptionMaxLength = config.catalogDescriptionMaxLength ?? DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH
   assertPositiveInteger('catalogDescriptionMaxLength', catalogDescriptionMaxLength, 3)
+  const catalogMaxBytes = config.catalogMaxBytes ?? DEFAULT_CATALOG_MAX_BYTES
+  assertPositiveInteger('catalogMaxBytes', catalogMaxBytes, 1)
 
   const skillTool = defineTool({
     name: 'skill',
@@ -203,188 +207,109 @@ export function apply(ctx: Context, config: Config = {}): void {
     return { kind: 'enter', messages: [...decision.messages, ...injections] }
   })
 
-  // Register after the tool so reverse teardown removes guidance first. Exact definition
-  // identity prevents a scoped shadow merely named `skill` from inheriting this catalog.
-  //
-  // The comparison is against the definition this plugin registered, not against
-  // a lookup of its own name: `register()` files into the CALLING context's
-  // scope, so a plugin mounted inside an agent preset registers for that agent
-  // alone and an unscoped lookup correctly finds nothing.
-  ctx.on('agent/pre-step', async (
-    { agent, signal },
-    next,
-  ): Promise<PreStepDecision> => {
-    const decision = await next()
-    if (decision.kind === 'reject') return decision
-    signal.throwIfAborted()
-    const toolVisible = ctx.tools.get(skillTool.name, agent) === skillTool
-    const snapshot = toolVisible
-      ? await ctx.skills.snapshot({ cwd: agent.session.header.cwd, signal, scope: agent })
-      : { skills: [], complete: true }
-    signal.throwIfAborted()
-    if (!snapshot.complete) return decision
-    const skills = snapshot.skills.filter(isModelInvocable)
-    const entries = catalogSourceEntries(skills, catalogDescriptionMaxLength)
-    const digest = digestCatalogEntries(entries)
-    const history = catalogHistory(agent)
-    const existing = catalogMessage(decision.messages)
-    if (history.visibleDigest === digest) {
-      return existing === undefined
-        ? decision
-        : { kind: 'enter', messages: decision.messages.filter(message => message.id !== existing.message.id) }
+  // Per-step skill catalog in the system prompt. `system-prompt/assemble`
+  // runs inside every step's prompt assembly, so the catalog is re-rendered
+  // at a fixed position each step instead of sinking into message history —
+  // the material stays visible regardless of how long the session grows or
+  // what compaction hides. The exact-definition identity check keeps a scoped
+  // same-name shadow from inheriting this catalog, mirroring the tool's own
+  // visibility gate.
+  const lastGood = new WeakMap<Agent, CatalogEntries>()
+  ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+    const assembled = await next()
+    const agent = context.agent
+    if (agent === undefined) return assembled
+    if (ctx.tools.get(skillTool.name, agent) !== skillTool) return assembled
+    const signal = context.signal
+    signal?.throwIfAborted()
+    const snapshot = await ctx.skills.snapshot({ cwd: agent.session.header.cwd, signal, scope: agent })
+    signal?.throwIfAborted()
+    // Incomplete discovery keeps the last-good entry list rather than
+    // dropping the catalog for a step; the empty initial view contributes
+    // nothing until a model-invocable skill exists.
+    const skills = snapshot.complete ? snapshot.skills.filter(isModelInvocable) : undefined
+    let entries: CatalogEntries | undefined
+    if (skills !== undefined) {
+      entries = catalogSourceEntries(skills, catalogDescriptionMaxLength)
+      lastGood.set(agent, entries)
+    } else {
+      entries = lastGood.get(agent)
     }
-    if (existing !== undefined && digestCatalogEntries(existing.entries) === digest) return decision
-    if (!history.published && skills.length === 0) {
-      return existing === undefined
-        ? decision
-        : { kind: 'enter', messages: decision.messages.filter(message => message.id !== existing.message.id) }
-    }
-    const catalog = history.published
-      ? renderCatalogUpdate(entries)
-      : renderCatalogMessage(entries)
+    if (entries === undefined || entries.length === 0) return assembled
     return {
-      kind: 'enter',
-      messages: existing === undefined
-        ? [...decision.messages, catalog]
-        : decision.messages.map(message => message.id === existing.message.id ? catalog : message),
+      ...assembled,
+      sections: [...assembled.sections, { name: CATALOG_SECTION_NAME, text: renderCatalogSection(entries, catalogMaxBytes) }],
     }
   })
 }
 
-function renderCatalogMessage(entries: SkillCatalogSource['entries']): UserMessage {
-  return createUserMessage({
-    content: [{
-      type: 'text',
-      text: [
-        '<system-reminder>',
-        'A skill is a reusable set of task-specific instructions. The following skills are available in this session:',
-        '',
-        '<available_skills>',
-        ...renderCatalogEntries(entries),
-        '</available_skills>',
-        '',
-        "If the user names a skill, or the task clearly matches a skill's description, call the `skill` tool with the exact skill name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains summaries only; do not infer or follow a skill's instructions until it has been loaded.",
-        'A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the `skill` tool again for that skill.',
-        '</system-reminder>',
-      ].join('\n'),
-    }],
-    source: {
-      kind: 'skill-catalog',
-      form: 'catalog',
-      entries,
-    },
-  })
+/**
+ * Model-facing catalog section text: the ordered name-and-description list and
+ * the trigger rule. The rule is mandatory and accountable — matching a skill's
+ * description obligates its use, and skipping an obvious match requires an
+ * explanation — rather than an optional reminder.
+ */
+function renderCatalogSection(entries: CatalogEntries, maxBytes: number | undefined): string {
+  const body = (list: CatalogEntries): string => [
+    'A skill is a reusable set of task-specific instructions. The following skills are available in this session:',
+    '',
+    '<available_skills>',
+    ...renderCatalogEntries(list),
+    '</available_skills>',
+    '',
+    "If the user names a skill, or the task clearly matches a skill's description, you MUST use that skill this turn. Announce which skills you are using and why. If you skip an obviously-matching skill, say why. Do not carry skills across turns unless re-mentioned. Call the `skill` tool with the exact skill name to load the full instructions before acting; the entries above are summaries only.",
+    'A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the `skill` tool again for that skill.',
+  ].join('\n')
+  if (maxBytes === undefined) return body(entries)
+  const full = body(entries)
+  if (utf8Bytes(full) <= maxBytes) return full
+  // Shorten descriptions equally to fit. The fixed framing (the entry lines'
+  // `- \`name\`: ` prefixes and the surrounding prose) is measured with empty
+  // descriptions, so names are never truncated or dropped.
+  const fixed = utf8Bytes(body(entries.map(entry => ({ ...entry, description: '' }))))
+  const available = maxBytes - fixed
+  if (available <= 0) return body(entries.map(entry => ({ ...entry, description: '' })))
+  const perEntry = Math.floor(available / entries.length)
+  return body(entries.map(entry => ({ ...entry, description: truncateUtf8(entry.description, perEntry) })))
 }
 
-function renderCatalogUpdate(entries: SkillCatalogSource['entries']): UserMessage {
-  const availability = entries.length === 0
-    ? [
-      'No skills are currently available through the `skill` tool. Do not use names from earlier skill catalogs.',
-      'A user may still invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the `skill` tool for it.',
-    ]
-    : [
-      'Use only names in this replacement catalog. If the user names a listed skill, or the task clearly matches its description, call the `skill` tool with the exact name before acting.',
-      'A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the `skill` tool again for that skill.',
-    ]
-  return createUserMessage({
-    content: [{
-      type: 'text',
-      text: [
-        '<system-reminder>',
-        'The available skill catalog changed. This complete catalog replaces every earlier available-skills list in this session:',
-        '',
-        '<available_skills>',
-        ...renderCatalogEntries(entries),
-        '</available_skills>',
-        '',
-        ...availability,
-        '</system-reminder>',
-      ].join('\n'),
-    }],
-    source: {
-      kind: 'skill-catalog',
-      form: 'catalog',
-      update: true,
-      entries,
-    },
-  })
+/** UTF-8 byte length of a string, for catalog budgeting. */
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).length
+}
+
+/** Longest prefix of `value` that fits in `maxBytes` UTF-8 bytes, never splitting a code point. */
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (utf8Bytes(value) <= maxBytes) return value
+  let lo = 0
+  let hi = value.length
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (utf8Bytes(value.slice(0, mid)) <= maxBytes) lo = mid
+    else hi = mid - 1
+  }
+  return value.slice(0, lo)
 }
 
 /**
- * Model-facing catalog lines, projected from the same entries the source records.
- * The pseudo-XML escaping belongs to this frame, not to the published fact, so it
- * is applied here and never stored. Names are `isSkillName`-validated and carry
- * no escapable character.
+ * Model-facing catalog lines, projected from the entries the section records.
+ * The pseudo-XML escaping belongs to this frame. Names are `isSkillName`-validated
+ * and carry no escapable character.
  */
-function renderCatalogEntries(entries: SkillCatalogSource['entries']): string[] {
-  return entries.map(entry => `- \`${entry.name}\`: ${escapeText(entry.description)}`)
+function renderCatalogEntries(entries: CatalogEntries): string[] {
+  return entries.map(entry => `- \`${entry.name}\`: ${escapeCatalogDescription(entry.description)}`)
 }
 
 /**
- * Catalog identity over the durable entry list rather than the rendered prose.
- * The entries are what changes; the surrounding `<system-reminder>` framing is
- * written for the model and must not decide whether a republish is needed.
+ * Description prose escaped for the system-prompt section. The section text is
+ * passed through `renderPrompt`'s strict `{{variable}}` interpolation, so braces
+ * are HTML-entity-escaped alongside the `escapeText` set to keep a description
+ * such as `{{placeholder}}` literal instead of an unknown variable reference.
  */
-function digestCatalogEntries(entries: SkillCatalogSource['entries']): string {
-  // JSON per entry rather than a separator character: every separator is itself
-  // a legal description character, so only quoting makes the boundary exact.
-  const canonical = entries.map(entry => JSON.stringify([entry.name, entry.description])).join('\n')
-  return createHash('sha256')
-    .update(canonical)
-    .digest('hex')
-}
-
-/**
- * Entries of one durable catalog message, or undefined when the record is not a
- * usable catalog.
- *
- * `agent.session.events` may be a resumed, forked, or externally written seed,
- * and seed validation only guarantees a source object with a non-empty `kind`;
- * no per-kind field is checked there. An unreadable record is therefore treated
- * as "not this plugin's catalog" — the posture the replaced content digest had —
- * rather than throwing inside the step listener, which would fail every
- * subsequent turn of that session.
- */
-function readCatalogEntries(source: unknown): SkillCatalogSource['entries'] | undefined {
-  const entries = (source as { entries?: unknown }).entries
-  if (!Array.isArray(entries)) return undefined
-  const readable: { name: string; description: string }[] = []
-  for (const entry of entries as readonly unknown[]) {
-    if (typeof entry !== 'object' || entry === null) return undefined
-    const { name, description } = entry as { name?: unknown; description?: unknown }
-    if (typeof name !== 'string' || name === '' || typeof description !== 'string') return undefined
-    readable.push({ name, description })
-  }
-  return readable
-}
-
-function catalogHistory(agent: Agent): { visibleDigest?: string; published: boolean } {
-  const visible = new Set(agent.session.surface.nodes)
-  const events = agent.session.events
-  let published = false
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    // The loop bounds prove the read-only event view contains this index.
-    // oxlint-disable-next-line typescript/no-non-null-assertion
-    const event = events[index]!
-    if (event.type !== 'user/message' || event.data.source.kind !== 'skill-catalog') continue
-    const entries = readCatalogEntries(event.data.source)
-    if (entries === undefined) continue
-    const digest = digestCatalogEntries(entries)
-    published = true
-    if (visible.has(event.seq)) return { visibleDigest: digest, published }
-  }
-  return { published }
-}
-
-function catalogMessage(
-  messages: readonly UserMessage[],
-): { message: UserMessage; entries: SkillCatalogSource['entries'] } | undefined {
-  for (const message of messages) {
-    if (message.source.kind !== 'skill-catalog') continue
-    const entries = readCatalogEntries(message.source)
-    if (entries !== undefined) return { message, entries }
-  }
-  return undefined
+function escapeCatalogDescription(value: string): string {
+  return escapeText(value)
+    .replaceAll('{', '&#123;')
+    .replaceAll('}', '&#125;')
 }
 
 /** Normalized, length-bounded description exactly as the catalog publishes it (unescaped). */
