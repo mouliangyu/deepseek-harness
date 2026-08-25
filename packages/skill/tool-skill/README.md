@@ -8,13 +8,11 @@ Requires `ctx.agents`, `ctx.tools`, and `ctx.skills` (`inject: ['agents', 'tools
 
 ## Catalog lifecycle
 
-At every eligible `agent/pre-step`, the plugin calls `ctx.skills.snapshot()` for the calling session's cwd, forwards the pre-step abort signal to discovery, applies exact `skill` tool visibility, and renders the ordered `name` and `description` entries. When no prior catalog exists and that view is non-empty, it adds an initial durable user-role `<system-reminder>` to a downstream `enter` decision. Catalog messages contain only those summaries; skill bodies, paths, sources, providers, and `whenToUse` hints remain outside the catalog.
+At every step, the plugin contributes the ordered `name` and `description` summaries as a system-prompt section named `skill:catalog` through the `system-prompt/assemble` waterfall. The section text is re-rendered with each prompt assembly, so the catalog stays at a fixed position in the system prompt instead of sinking into message history; it neither dilutes as the session grows nor disappears when compaction hides earlier messages. The section contains only those summaries; skill bodies, paths, sources, providers, and `whenToUse` hints remain outside the catalog.
 
-Every catalog message carries the `skill-catalog` source: a `catalog`-form context whose `entries` record exactly the `name` and `description` pairs it published, plus `update` on a replacement. The digest covers those durable entries, not the rendered prose, so the surrounding `<system-reminder>` framing cannot decide whether a republish is needed and consumers never re-parse the `<available_skills>` block. The plugin scans durable session events backwards without copying them and derives the comparison baseline from the newest visible `skill-catalog` message it can read; unreadable and foreign records are skipped. When the digest changes, the downstream `enter` decision receives a durable user-role message containing the complete replacement catalog; an empty replacement explicitly retires earlier names. If no catalog remains visible but a recognizable historical catalog exists, compaction hid it and the next complete observation re-establishes the current catalog. An incomplete provider snapshot emits nothing and preserves the last-good model view for retry at the next pre-step. If no prior catalog exists and the current view is empty, no tombstone is necessary.
+The section is contributed only when model-invocable skills exist and this exact `skill` tool is visible to the calling agent. Identity is compared against the definition this plugin registered rather than a lookup of its own name, so the plugin works mounted globally or inside one agent's composition, where `register()` files into that agent's layer alone. A restriction or scoped same-name shadow removes both the schema and the section. An incomplete provider snapshot re-renders the last-good entry list; the empty initial view contributes nothing.
 
-The catalog is omitted when no model-invocable skills are initially available, and also when that agent's tool view restricts away the shipped `skill` tool or resolves a same-name scoped shadow instead. Identity is compared against the definition this plugin registered rather than a lookup of its own name, so the plugin works mounted globally or inside one agent's composition, where `register()` files into that agent's layer alone. Visibility changes participate in the digest, keeping prompt guidance, model-visible schema, and executable dispatch aligned.
-
-`catalogDescriptionMaxLength` controls normalized catalog descriptions; rendering XML-escapes them. Its default is `500` and values must be integers of at least `3`, which reserves room for a truncation ellipsis. The [skill catalog hot-refresh Agent Note](../../../.agents/notes/implemented/feature/2026-07-27-skill-catalog-hot-refresh.md) owns the durable initial catalog and replacement lifecycle.
+Descriptions are normalized, XML-escaped, then brace-escaped (`{` and `}` become `&#123;` and `&#125;`) so a literal `{{...}}` in a description does not read as a `{{variable}}` reference during prompt interpolation. `catalogDescriptionMaxLength` controls normalized catalog descriptions; its default is `500` and values must be integers of at least `3`, which reserves room for a truncation ellipsis. `catalogMaxBytes` caps the whole rendered section (default `20000` bytes): when the section exceeds it, descriptions are shortened equally to fit while skill names are never truncated or dropped.
 
 ## Tool: `skill`
 
@@ -36,30 +34,28 @@ Tool execution does not add a synthetic context message. Its freshly loaded resu
 
 #### What the model sees
 
-If model-invocable skills exist and this exact `skill` tool is visible, the agent receives the catalog template below as a durable user-role message before the first request, with one data-dependent entry per sorted skill. Later membership, description, or visibility changes append a complete replacement using the same `<available_skills>` envelope; deleting every skill appends an empty envelope with an explicit instruction not to use older names. The template's closing sentence is the rule against double-loading: the user-explicit gesture boundary (the pre-step listener below) injects the same `renderSkillContent` output (shared from `@deepseek-ai/dsh-skill`) inline, and the catalog tells the model to follow that block instead of re-loading the skill through the tool; the replacement-catalog template carries the same sentence in both arms, including the emptied catalog.
+If model-invocable skills exist and this exact `skill` tool is visible, the system prompt carries the catalog section below at every step, with one data-dependent entry per sorted skill. The rule is mandatory and accountable: matching a skill's description obligates its use, and skipping an obvious match requires an explanation. The closing sentence is the rule against double-loading: the user-explicit gesture boundary (the pre-step listener below) injects the same `renderSkillContent` output (shared from `@deepseek-ai/dsh-skill`) inline, and the catalog tells the model to follow that block instead of re-loading the skill through the tool.
 
 ##### Skill catalog template
 
 ```markdown
-<system-reminder>
 A skill is a reusable set of task-specific instructions. The following skills are available in this session:
 
 <available_skills>
 - `<name>`: <normalized-and-capped-description>
 </available_skills>
 
-If the user names a skill, or the task clearly matches a skill's description, call the `skill` tool with the exact skill name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains summaries only; do not infer or follow a skill's instructions until it has been loaded.
+If the user names a skill, or the task clearly matches a skill's description, you MUST use that skill this turn. Announce which skills you are using and why. If you skip an obviously-matching skill, say why. Do not carry skills across turns unless re-mentioned. Call the `skill` tool with the exact skill name to load the full instructions before acting; the entries above are summaries only.
 A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the `skill` tool again for that skill.
-</system-reminder>
 ```
 
 #### Token effect
 
-Repeated input cost scales with skill count and `catalogDescriptionMaxLength`; no initial catalog tokens are sent when the list is empty or the tool is hidden or shadowed. Each actual catalog change adds one retained complete replacement message.
+Per-step system-prompt input scales with skill count and `catalogDescriptionMaxLength`; no catalog section is contributed when the list is empty or the tool is hidden or shadowed. `catalogMaxBytes` (default `20000`) shortens descriptions — never names — to keep the whole section under that byte cap.
 
 #### KV Cache effect
 
-The initial durable catalog is appended after the existing reusable prefix. Dynamic changes are append-only history after that catalog, so earlier reusable tokens stay intact while each newly appended catalog and later turns form a new suffix. A new or resumed instance with a changed digest may affect cache reuse from the newly appended catalog position.
+The section is part of the system prompt's cached prefix. Re-rendering an unchanged catalog is free; a membership or description change rewrites the prefix once and then stays stable.
 
 ### Tool schema
 
@@ -165,5 +161,5 @@ Append-only; the injection lands after the reusable request prefix inside the st
 - **Loaded instruction bodies have no size cap** — a provider can return a skill large enough to consume substantial next-step context; only catalog descriptions are truncated.
 - **Resources are guidance, not attachments** — the tool reports a base directory/URL/opaque hint but neither enumerates nor fetches referenced files for the model.
 - **Loading is one-shot text** — there is no partial, streaming, or cached-content handle when a remote provider is slow or a skill body is large.
-- **Catalog replacement is whole-list** — one changed name or description appends every currently visible summary; this keeps stale-name retirement explicit but costs tokens proportional to the catalog.
-- **Bodies are not versioned** — body-only edits do not change the catalog digest or notify the model; a later tool call reads the current provider content while earlier tool results remain historical facts.
+- **The catalog is recomputed per step** — a resumed or forked session sees the current skill set, not the historical catalog shown earlier in the parent session.
+- **Bodies are not versioned** — body-only edits do not change the catalog; a later tool call reads the current provider content while earlier tool results remain historical facts.

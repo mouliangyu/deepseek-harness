@@ -6,7 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import { renderPrompt, TOOL_ORDER_REST } from '@deepseek-ai/dsh-system-prompt'
 import * as agentCore from '../src/index.ts'
-import { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
+import { type Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import LocalBashExecutor from '@deepseek-ai/dsh-bash-local'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
@@ -37,22 +37,8 @@ declare module '@deepseek-ai/dsh-jobs' {
   }
 }
 
-async function composePrefix(ctx: Context, cwd: string): Promise<Message[]> {
-  const agent = ctx.agentLoop.create(SessionId('agent-spine-prefix'), {}, { cwd })
-  const signal = new AbortController().signal
-  const decision = await agentEvents(ctx, agent).waterfall(
-    'agent/pre-step', { messages: [], turn: 1, step: 1, signal },
-    () => Promise.resolve({ kind: 'enter', messages: [] }),
-  )
-  if (decision.kind === 'enter') {
-    for (const message of decision.messages) {
-      agent.session.append('user/message', message, { surfaceOp: 'append' })
-    }
-  }
-  return agent.session.deriveMessages()
-}
-
 /**
+
  * Unit coverage for the @deepseek-ai/dsh-agent-spine-demo bundle: mounting it brings
  * up the whole default spine in one `ctx.plugin`, and the forwarded
  * `agents` config reaches the loop (default `[]`, or a pre-created agent).
@@ -434,7 +420,8 @@ describe('dsh-agent-spine-demo bundle', () => {
       },
     })
     expect((await ctx.skills.list()).map(skill => skill.name)).toEqual(['custom-skill'])
-    expect(JSON.stringify(await composePrefix(ctx, '/tmp'))).toContain('- `custom-skill`: Cus...')
+    const probe = ctx.agentLoop.create(SessionId('agent-spine-cap-probe'), {}, { cwd: '/tmp' })
+    expect(renderPrompt(await ctx.systemPrompt.assemble({ agent: probe, scope: probe }))).toContain('- `custom-skill`: Cus...')
     await ctx.fiber.dispose()
   })
 
@@ -494,12 +481,12 @@ describe('dsh-agent-spine-demo bundle', () => {
       await waitForIdle(ctx, handle.agent)
 
       expect(adapter.requests).toHaveLength(4)
-      expect(adapter.requests.slice(0, 2).map(request => request.messages.map(messageText).join('\n')))
+      expect(adapter.requests.slice(0, 2).map(request => request.system ?? ''))
         .toEqual([
           expect.not.stringContaining('hot-skill'),
           expect.not.stringContaining('hot-skill'),
         ])
-      const catalogRequest = adapter.requests[2]?.messages.map(messageText).join('\n')
+      const catalogRequest = adapter.requests[2]?.system ?? ''
       expect(catalogRequest).toContain('The following skills are available in this session:')
       expect(catalogRequest).toContain('- `hot-skill`: Hot-added skill')
       const loadedRequest = JSON.stringify(adapter.requests[3]?.messages)
@@ -507,13 +494,6 @@ describe('dsh-agent-spine-demo bundle', () => {
       expect(loadedRequest).toContain('Use the freshly loaded body.')
 
       const transcript = handle.agent.session.events.flatMap<Record<string, unknown>>((event) => {
-        if (event.type === 'user/message' && event.data.source.kind === 'skill-catalog') {
-          return [{
-            type: event.type,
-            source: event.data.source,
-            text: event.data.content.map(block => block.type === 'text' ? block.text : '').join('\n'),
-          }]
-        }
         if (event.type === 'tool/result'
           && ['write-skill', 'load-skill'].includes(event.data.message.source.callId)) {
           const result = event.data.message.content[0]
@@ -539,29 +519,6 @@ describe('dsh-agent-spine-demo bundle', () => {
         Created file
         </content>",
             "type": "tool/result",
-          },
-          {
-            "source": {
-              "entries": [
-                {
-                  "description": "Hot-added skill",
-                  "name": "hot-skill",
-                },
-              ],
-              "form": "catalog",
-              "kind": "skill-catalog",
-            },
-            "text": "<system-reminder>
-        A skill is a reusable set of task-specific instructions. The following skills are available in this session:
-
-        <available_skills>
-        - \`hot-skill\`: Hot-added skill
-        </available_skills>
-
-        If the user names a skill, or the task clearly matches a skill's description, call the \`skill\` tool with the exact skill name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains summaries only; do not infer or follow a skill's instructions until it has been loaded.
-        A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the \`skill\` tool again for that skill.
-        </system-reminder>",
-            "type": "user/message",
           },
           {
             "callId": "load-skill",
@@ -649,15 +606,11 @@ describe('dsh-agent-spine-demo bundle', () => {
       await waitForIdle(ctx, handle.agent)
 
       expect(adapter.requests).toHaveLength(1)
+      expect(adapter.requests[0]!.system ?? '').toContain('prefix-order-skill')
       const workspaceIndex = adapter.requests[0]!.messages.findIndex(
         message => messageText(message).includes('workspace rule before skills'),
       )
-      const catalogIndex = adapter.requests[0]!.messages.findIndex(
-        message => messageText(message).includes('prefix-order-skill'),
-      )
       expect(workspaceIndex).toBeGreaterThanOrEqual(0)
-      expect(catalogIndex).toBeGreaterThanOrEqual(0)
-      expect(workspaceIndex).toBeLessThan(catalogIndex)
       await handle.dispose()
       await ctx.fiber.dispose()
     } finally {
