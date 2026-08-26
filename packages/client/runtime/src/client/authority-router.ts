@@ -70,7 +70,10 @@ export class AuthorityApiRouter {
         if (authority === undefined) return this.local.respond(message, signal)
         const connection = this.registry.get(authority)
         if (connection === undefined) throw new Error(`authority is not connected: ${authority}`)
-        return connection.api.respond(message, signal)
+        // Restore namespaced ids (sessionId/workspaceId) to their wire values
+        // before forwarding, mirroring the `call` path: the remote host's
+        // pending-approval/question matching compares against its own ids.
+        return connection.api.respond(mapIds(message, unwrapId), signal)
       },
     } as IApiClient
   }
